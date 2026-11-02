@@ -1,0 +1,41 @@
+[project]
+name = "multimodal-ser"
+version = "0.1.0"
+description = "Multimodal (audio + ASR transcript) speech emotion recognition on MELD"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    "scikit-learn>=1.5",
+    "jiwer>=3.0",
+    "huggingface_hub[cli,hf_xet]>=0.30",
+    "jupyter>=1.1",
+    "ipykernel>=6.29",
+    "tabulate>=0.9",
+    "pypdf>=5.0",
+]
+
+[project.optional-dependencies]
+dl = [
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "transformers>=4.45",
+    "opensmile>=2.5",
+    "captum>=0.7",
+    "shap>=0.46",
+    "gradio>=5.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

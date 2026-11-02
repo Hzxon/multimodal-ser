@@ -1,0 +1,78 @@
+# Research pipeline
+
+Source files: `reports/figures/pipeline.mmd` (phases and gates) and `reports/figures/inference_flow.mmd` (the deployed model). Render with any Mermaid viewer, or `npx -y @mermaid-js/mermaid-cli -i reports/figures/pipeline.mmd -o reports/figures/pipeline.png`.
+
+## Phases and gates
+
+```mermaid
+flowchart TB
+    %% ---------- Phase 1: data ----------
+    subgraph P1["Phase 1 · Dataset"]
+        A1["MELD.Raw.tar.gz (10.9 GB)<br/>+ official label CSVs"] --> A2["prepare_raw.sh<br/>extract nested archives, record sha256"]
+        A2 --> A3["extract_audio.py<br/>mp4 → mono 16 kHz PCM16 WAV<br/>log ffmpeg failures"]
+        A3 --> A4["build_manifest.py<br/>join labels + audio, duration, sha256,<br/>exclude_reason for cross-split duplicates"]
+        A4 --> G1(["Gate 1 · check_dataset.py<br/>labels valid · splits disjoint · no duplicate audio<br/>speaker overlap documented · durations"])
+    end
+
+    %% ---------- Phase 2: audit + EDA ----------
+    subgraph P2["Phase 2 · Audit and EDA"]
+        G1 --> B1["Usability audit<br/>label noise κ=0.43 · mis-cut clips<br/>laugh track · published ceilings"]
+        B1 --> B2["eda.py<br/>class stats · shortcut floor · top words<br/>repeated lines · speaker × emotion · audio quality"]
+        B2 --> G2(["Gate 2<br/>shortcut floor recorded · findings → design decisions<br/>data policy ratified"])
+    end
+
+    %% ---------- Phase 3: preprocessing + features ----------
+    subgraph P3["Phase 3 · Preprocessing and features"]
+        G2 --> C0["Apply data policy<br/>drop train clips < 0.5 s, duplicates, unreadable<br/>dev/test kept complete + clean-test subset"]
+        C0 --> C1["ASR · Whisper (pinned)<br/>asr_text per clip, cached once<br/>WER vs gold per split/class"]
+        C0 --> C2["Audio features<br/>eGeMAPS (openSMILE) · WavLM-base-plus layers<br/>scaler fit on train only, cache per split"]
+        C1 --> C3["Text inputs<br/>ASR text (main) · gold text (upper bound)<br/>TF-IDF fit on train only · RoBERTa tokens"]
+        C0 --> C4["Train-only augmentation<br/>noise 10–30 dB SNR · speed 0.9–1.1 · SpecAugment"]
+        C1 & C2 & C3 & C4 --> G3(["Gate 3 · check_preprocessing.py<br/>ASR deterministic · no hallucination · scalers train-only<br/>cache isolation · golden-set regression"])
+    end
+
+    %% ---------- Phase 4: models ----------
+    subgraph P4["Phase 4 · Model development (dev-set selection only)"]
+        G3 --> D0["Floors<br/>majority · length-only"]
+        D0 --> D1["Unimodal baselines<br/>TF-IDF+LR · eGeMAPS+MLP"]
+        D1 --> D2["Unimodal strong<br/>RoBERTa (ASR text) · WavLM + MLP"]
+        D2 --> D3["Fusion<br/>late fusion · gated concat · cross-attention<br/>class-weighted CE · modality dropout"]
+        D3 --> G4(["Gate 4 · sanity_checks.py<br/>overfit one batch · shuffled-label ≈ chance<br/>test never opened · 3 seeds · minority recall > 0"])
+    end
+
+    %% ---------- Phase 5: evaluation ----------
+    subgraph P5["Phase 5 · Evaluation (test, once per seed)"]
+        G4 --> E1["Metrics<br/>weighted F1 · macro F1 · per-class · confusion<br/>95% bootstrap CI · McNemar fusion vs text"]
+        E1 --> E2["Conditions<br/>gold vs ASR transcript 2×2 · noise robustness<br/>full test vs clean-test · corrected-label subset"]
+        E2 --> E3["Error analysis<br/>30 stratified errors · ASR error / modality disagreement / ambiguous"]
+        E3 --> G5(["Gate 5<br/>CIs · significance · literature comparison"])
+    end
+
+    %% ---------- Phase 6: XAI ----------
+    subgraph P6["Phase 6 · Explainability"]
+        G5 --> F1["Global<br/>SHAP on eGeMAPS · WavLM layer weights · IG token ranking"]
+        G5 --> F2["Local<br/>Integrated Gradients (text) · 250 ms occlusion (audio)<br/>gate value = modality contribution"]
+        F1 & F2 --> F3["Faithfulness<br/>deletion curves vs random · parameter-randomisation sanity"]
+        F3 --> G6(["Gate 6<br/>faithful · case studies incl. sarcasm and disagreement"])
+    end
+
+    %% ---------- Phase 7 ----------
+    G6 --> H1["Phase 7 · Report + Gradio demo<br/>run_all.sh reproduces every number"]
+
+    classDef gate fill:#fff3cd,stroke:#b8860b,color:#000
+    class G1,G2,G3,G4,G5,G6 gate
+```
+
+## Deployed inference flow
+
+```mermaid
+flowchart LR
+    A["Audio clip<br/>16 kHz mono"] --> W["Whisper ASR"]
+    W --> T["Transcript"]
+    A --> AE["WavLM-base-plus<br/>layer-weighted mean pool"]
+    T --> TE["RoBERTa-base<br/>CLS embedding"]
+    AE --> F["Fusion<br/>g = σ(W[h_a;h_t])<br/>[h_a ; h_t ; g·h_a ; (1−g)·h_t]"]
+    TE --> F
+    F --> C["Softmax<br/>7 emotion classes"]
+    C --> X["Explanations<br/>token attributions · audio saliency · g"]
+```

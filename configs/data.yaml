@@ -1,0 +1,20 @@
+# Dataset configuration. Paths are relative to the repository root.
+dataset: MELD
+raw_dir: data/raw
+labels:
+  train: data/raw/train_sent_emo.csv
+  dev: data/raw/dev_sent_emo.csv
+  test: data/raw/test_sent_emo.csv
+wav_dir: data/processed/wav16k
+manifest_dir: data/manifests
+sample_rate: 16000
+emotions: [neutral, joy, surprise, anger, sadness, disgust, fear]
+# Clips longer than this are flagged in Gate 1 (D8); the training crop length is set in the model configs.
+long_clip_seconds: 15
+# Data policy (reports/meld_usability_audit.md, Section 8).
+# Train clips shorter than min_clip_seconds are excluded (speech fragments from mis-cut subtitles).
+# clean_subset = decodable and min_clip_seconds <= duration <= max_clean_seconds, reported next to the full split.
+min_clip_seconds: 0.5
+max_clean_seconds: 20
+# Label source: the GitHub CSVs (UTF-8, corrected row for train dia556_utt6). The CSVs inside
+# MELD.Raw.tar.gz are cp1252/double-encoded copies of the same annotations.

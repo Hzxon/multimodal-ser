@@ -1,0 +1,9 @@
+flowchart LR
+    A["Audio clip<br/>16 kHz mono"] --> W["Whisper ASR"]
+    W --> T["Transcript"]
+    A --> AE["WavLM-base-plus<br/>layer-weighted mean pool"]
+    T --> TE["RoBERTa-base<br/>CLS embedding"]
+    AE --> F["Fusion<br/>g = σ(W[h_a;h_t])<br/>[h_a ; h_t ; g·h_a ; (1−g)·h_t]"]
+    TE --> F
+    F --> C["Softmax<br/>7 emotion classes"]
+    C --> X["Explanations<br/>token attributions · audio saliency · g"]
