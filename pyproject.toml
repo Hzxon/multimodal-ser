@@ -19,10 +19,8 @@ dependencies = [
     "ipykernel>=6.29",
     "tabulate>=0.9",
     "pypdf>=5.0",
-]
-
-[project.optional-dependencies]
-dl = [
+    # Deep-learning stack. Kept in the base dependencies so a plain `uv sync` never
+    # removes it (an extra is dropped by `uv sync` without `--extra`).
     "torch>=2.4",
     "torchaudio>=2.4",
     "transformers>=4.45",
@@ -31,6 +29,10 @@ dl = [
     "shap>=0.46",
     "gradio>=5.0",
 ]
+
+[project.optional-dependencies]
+# Kept so `uv sync --extra dl` (older README instructions) still works; the packages are in the base set.
+dl = []
 
 [tool.uv]
 package = false

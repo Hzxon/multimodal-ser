@@ -1505,6 +1505,8 @@ name = "multimodal-ser"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "captum" },
+    { name = "gradio" },
     { name = "huggingface-hub", extra = ["hf-xet"] },
     { name = "ipykernel" },
     { name = "jiwer" },
@@ -1512,24 +1514,18 @@ dependencies = [
     { name = "librosa" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "opensmile" },
     { name = "pandas" },
     { name = "pypdf" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
     { name = "seaborn" },
+    { name = "shap" },
     { name = "soundfile" },
     { name = "tabulate" },
-    { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-dl = [
-    { name = "captum" },
-    { name = "gradio" },
-    { name = "opensmile" },
-    { name = "shap" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "tqdm" },
     { name = "transformers" },
 ]
 
@@ -1540,8 +1536,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "captum", marker = "extra == 'dl'", specifier = ">=0.7" },
-    { name = "gradio", marker = "extra == 'dl'", specifier = ">=5.0" },
+    { name = "captum", specifier = ">=0.7" },
+    { name = "gradio", specifier = ">=5.0" },
     { name = "huggingface-hub", extras = ["cli", "hf-xet"], specifier = ">=0.30" },
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "jiwer", specifier = ">=3.0" },
@@ -1549,19 +1545,19 @@ requires-dist = [
     { name = "librosa", specifier = ">=0.10" },
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numpy", specifier = ">=1.26,<3" },
-    { name = "opensmile", marker = "extra == 'dl'", specifier = ">=2.5" },
+    { name = "opensmile", specifier = ">=2.5" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pypdf", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "seaborn", specifier = ">=0.13" },
-    { name = "shap", marker = "extra == 'dl'", specifier = ">=0.46" },
+    { name = "shap", specifier = ">=0.46" },
     { name = "soundfile", specifier = ">=0.12" },
     { name = "tabulate", specifier = ">=0.9" },
-    { name = "torch", marker = "extra == 'dl'", specifier = ">=2.4" },
-    { name = "torchaudio", marker = "extra == 'dl'", specifier = ">=2.4" },
+    { name = "torch", specifier = ">=2.4" },
+    { name = "torchaudio", specifier = ">=2.4" },
     { name = "tqdm", specifier = ">=4.66" },
-    { name = "transformers", marker = "extra == 'dl'", specifier = ">=4.45" },
+    { name = "transformers", specifier = ">=4.45" },
 ]
 provides-extras = ["dl"]
 

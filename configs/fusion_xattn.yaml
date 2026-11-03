@@ -1,0 +1,56 @@
+# PLAN.md model 8: one cross-attention block each way (text tokens query audio frames,
+# audio frames query text tokens), pooled and concatenated. Needs audio.mode: finetune.
+# Both encoders initialised from the unimodal runs; modality dropout 0.15.
+name: fusion_xattn
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: asr
+  feature_root: data/processed/features
+model:
+  type: fusion_xattn
+  n_heads: 4
+  d_model: 256
+  head_hidden: 256
+  dropout: 0.1
+  p_mod_drop: 0.15
+  text:
+    name: roberta-base
+    pooling: cls
+    dropout: 0.1
+  audio:
+    mode: finetune
+    name: microsoft/wavlm-base-plus
+    n_layers: 13
+    hidden_size: 768
+    head_hidden: 256
+    dropout: 0.2
+    unfreeze_top_n: 4
+    normalize_wav: null   # null = follow the HF preprocessor config
+    spec_augment: {enabled: true, mask_time_prob: 0.05, mask_time_length: 10}
+  # Template: src/train.py replaces {seed} with --seed (and re-roots runs/... under --runs-root), so seed 42
+  # starts from runs/text_roberta/42 and runs/audio_wavlm_ft/42. A missing run is an error.
+  init_from:
+    text: runs/text_roberta/{seed}
+    audio: runs/audio_wavlm_ft/{seed}
+train:
+  batch_size: 16
+  grad_accum: 1
+  max_epochs: 15
+  patience: 3
+  lr_encoder: 2.0e-5
+  lr_head: 1.0e-3
+  weight_decay: 0.01
+  warmup_frac: 0.1
+  grad_clip: 1.0
+  class_weight: sqrt_inv
+  undersample: false       # true = PLAN 5 ablation: every class cut to the smallest class count (seeded)
+  loss: ce
+  max_text_tokens: 64
+  max_audio_s: 10
+  fp16: true
+  augment:
+    enabled: true
+    speed: {factors: [0.9, 1.1]}
+    noise: {snr_db: [10, 30]}

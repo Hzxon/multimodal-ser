@@ -1,0 +1,14 @@
+# PLAN.md model 2: TF-IDF + logistic regression on Whisper transcripts (text baseline).
+# Vectoriser: <feature_root>/tfidf_asr_whisper-small/vectorizer.pkl, fit on train only (src/features/text_embed.py).
+name: text_tfidf
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: asr
+  feature_root: data/processed/features
+model:
+  type: tfidf_lr
+  class_weight: sqrt_inv
+  C: 1.0
+train: {}

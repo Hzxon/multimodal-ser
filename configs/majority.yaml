@@ -1,0 +1,11 @@
+# PLAN.md model 0: majority class (floor).
+name: majority
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: gold
+  feature_root: data/processed/features
+model:
+  type: majority
+train: {}

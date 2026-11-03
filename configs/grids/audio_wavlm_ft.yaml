@@ -1,0 +1,10 @@
+# Hyper-parameter grid for model 5 (fine-tune stage): lr_encoder x class-weight scheme x unfreeze_top_n.
+# 3 x 2 x 2 = 12 configs. Every config starts from the cached-stage run of the same seed.
+family: audio_wavlm_ft
+base_config: configs/audio_wavlm_ft.yaml
+grid:
+  train.lr_encoder: [1.0e-5, 2.0e-5, 5.0e-5]
+  train.class_weight: [sqrt_inv, inv]
+  model.unfreeze_top_n: [2, 4]
+init_from:   # {init_root} = --init-root (default runs), {seed} = --seed
+  model.init_from: "{init_root}/audio_wavlm_cached/{seed}"

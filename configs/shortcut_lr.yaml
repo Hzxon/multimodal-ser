@@ -1,0 +1,13 @@
+# PLAN.md model 1: duration + token-count logistic regression (shortcut floor, Gate E1).
+name: shortcut_lr
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: asr
+  feature_root: data/processed/features
+model:
+  type: shortcut_lr
+  class_weight: sqrt_inv
+  C: 1.0
+train: {}

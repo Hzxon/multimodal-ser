@@ -7,7 +7,10 @@
   Weighting the per-layer means equals mean-pooling the weighted frames, so this is the
   frozen version of ``finetune`` exactly.
 - ``finetune``: runs ``microsoft/wavlm-base-plus`` on ``batch["wav"]``/``batch["wav_mask"]``
-  with ``output_hidden_states=True``, masked mean pool per layer, same head. The CNN
+  with ``output_hidden_states=True``, masked mean pool per layer, same head. Waveform
+  normalisation and whether the attention mask is passed follow the checkpoint's
+  preprocessor config (``do_normalize``, ``return_attention_mask``) unless
+  ``normalize_wav`` / ``use_attention_mask`` are set in the model config. The CNN
   feature encoder is always frozen; the top ``unfreeze_top_n`` transformer layers train
   (0 = fully frozen). SpecAugment is the encoder's own ``mask_time_prob`` /
   ``mask_time_length`` masking, active only in ``train()`` mode. ``init_from`` loads the
@@ -46,13 +49,20 @@ class AudioClassifier(nn.Module):
         self.n_layers = int(cfg.get("n_layers", 13))
         self.embedding_dim = int(cfg.get("hidden_size", 768))
         self.normalize_wav = bool(cfg.get("normalize_wav", True))
+        self.use_attention_mask = bool(cfg.get("use_attention_mask", True))
         self.layer_logits = nn.Parameter(torch.zeros(self.n_layers))
         self.head = mlp_head(self.embedding_dim, int(cfg.get("head_hidden", 256)),
                              int(cfg.get("num_classes", NUM_CLASSES)), float(cfg.get("dropout", 0.1)))
         self.encoder = None
         if self.mode == "finetune":
-            from transformers import WavLMModel
+            from transformers import AutoFeatureExtractor, WavLMModel
 
+            # follow the checkpoint's preprocessing config unless the experiment config overrides it
+            fe = AutoFeatureExtractor.from_pretrained(self.name)
+            v = cfg.get("normalize_wav")
+            self.normalize_wav = bool(fe.do_normalize) if v is None else bool(v)
+            v = cfg.get("use_attention_mask")
+            self.use_attention_mask = bool(fe.return_attention_mask) if v is None else bool(v)
             sa = cfg.get("spec_augment") or {}
             self.encoder = WavLMModel.from_pretrained(
                 self.name, output_hidden_states=True,
@@ -119,8 +129,9 @@ class AudioClassifier(nn.Module):
         wav, mask = batch["wav"], batch["wav_mask"]
         if self.normalize_wav:
             wav = self._normalize(wav, mask)
-        out = self.encoder(input_values=wav, attention_mask=mask.long())
-        hs = torch.stack(out.hidden_states, dim=0)  # [13, B, F, H]
+        out = self.encoder(input_values=wav, attention_mask=mask.long() if self.use_attention_mask else None,
+                           output_hidden_states=True)
+        hs = torch.stack(out.hidden_states, dim=0)  # [13, B, F, H]: input of layer 0, then each layer's output
         w = self._weights().to(hs.dtype)
         frames = torch.einsum("l,lbfh->bfh", w, hs)
         return frames, self._frame_mask(mask, frames.shape[1])
@@ -144,7 +155,12 @@ class AudioClassifier(nn.Module):
 
 
 class EgemapsMLP(nn.Module):
-    """Model 3 (torch variant): scaled eGeMAPS (88) -> hidden -> 7."""
+    """Model 3 (torch variant): scaled eGeMAPS (88) -> hidden layer(s) -> 7.
+
+    ``hidden`` is an int (one hidden layer) or a list of ints (one layer per entry), the same
+    values ``src.baselines`` passes to scikit-learn's ``hidden_layer_sizes``; the last entry is
+    ``embedding_dim``.
+    """
 
     modalities = frozenset({"audio"})
 
@@ -152,9 +168,17 @@ class EgemapsMLP(nn.Module):
         super().__init__()
         self.cfg = dict(cfg)
         self.in_dim = int(cfg.get("in_dim", 88))
-        self.embedding_dim = int(cfg.get("hidden", 128))
+        hidden = cfg.get("hidden", 128)
+        sizes = [int(h) for h in hidden] if isinstance(hidden, (list, tuple)) else [int(hidden)]
+        assert sizes and all(h > 0 for h in sizes), f"hidden must be a positive int or non-empty list, got {hidden!r}"
+        self.embedding_dim = sizes[-1]
         d = float(cfg.get("dropout", 0.2))
-        self.body = nn.Sequential(nn.Linear(self.in_dim, self.embedding_dim), nn.GELU(), nn.Dropout(d))
+        layers: list[nn.Module] = []
+        prev = self.in_dim
+        for h in sizes:
+            layers += [nn.Linear(prev, h), nn.GELU(), nn.Dropout(d)]
+            prev = h
+        self.body = nn.Sequential(*layers)
         self.head = nn.Linear(self.embedding_dim, int(cfg.get("num_classes", NUM_CLASSES)))
 
     def pretrained_modules(self) -> list[nn.Module]:

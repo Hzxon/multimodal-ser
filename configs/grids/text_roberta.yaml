@@ -1,0 +1,10 @@
+# Hyper-parameter grid for model 4 (PLAN.md 3.4): lr_encoder x class-weight scheme x pooling.
+# 3 x 2 x 2 = 12 configs, the PLAN.md cap. Dev only: scripts/hparam_grid.py reads dev metrics from
+# each run's metrics.json and never touches the test split (Gates M3, M4).
+family: text_roberta
+base_config: configs/text_roberta.yaml
+grid:
+  train.lr_encoder: [1.0e-5, 2.0e-5, 3.0e-5]
+  train.class_weight: [sqrt_inv, inv]
+  model.pooling: [cls, mean]
+init_from: {}

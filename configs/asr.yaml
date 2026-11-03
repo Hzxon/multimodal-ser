@@ -1,0 +1,28 @@
+# ASR configuration (PLAN.md Phase 3, step 1). Every field used by src/asr/transcribe.py is here.
+tag: whisper-small                 # iteration model; transcripts go to <manifest_dir>/asr/<tag>/<split>.csv
+model_id: openai/whisper-small
+final:                             # model for the final run (PLAN.md Section 0)
+  tag: whisper-large-v3-turbo
+  model_id: openai/whisper-large-v3-turbo
+language: en
+task: transcribe
+sample_rate: 16000
+dtype: float32                     # fp16 is unreliable on mps for Whisper
+decoding:
+  num_beams: 1
+  do_sample: false
+  temperature: 0.0
+  max_new_tokens: 128              # longest MELD gold text is far below this
+batch_size: 8
+long_form:                         # clips above max_short_seconds; MELD has two test clips (305 s, 235 s)
+  mode: sequential
+  max_short_seconds: 30.0
+  condition_on_prev_tokens: false
+# Hallucination screen (reports/preprocessing_validation.md, Stage 3)
+hallucination:
+  too_long_ratio: 3.0              # ASR words > ratio * gold words ...
+  too_long_min_gold_words: 3       # ... and gold words >= this
+  repeat_3gram_max: 3              # any 3-gram occurring more than this many times
+  silence_rms_dbfs: -40.0          # filler_on_silence applies below this clip RMS
+  fillers: [thank you, thanks, you, bye, bye bye, thank you for watching, thanks for watching]   # whole-transcript match
+  filler_phrases: [subtitles by, thanks for watching, thank you for watching, amara org, subscribe to]  # substring match

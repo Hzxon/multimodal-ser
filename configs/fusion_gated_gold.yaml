@@ -1,0 +1,56 @@
+# PLAN.md model 7, gold-transcript twin of fusion_gated (2x2 transcript table, PLAN 3.5 V5):
+# identical except data.text_source: gold and the text branch initialised from text_roberta_gold.
+# Gated concatenation [h_a; h_t; g*h_a; (1-g)*h_t], g = sigmoid(W[h_a; h_t]). Audio branch in
+# finetune mode (top-4 layers), text branch roberta-base; modality dropout 0.15.
+name: fusion_gated_gold
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: gold
+  feature_root: data/processed/features
+model:
+  type: fusion_gated
+  d_model: 256
+  head_hidden: 256
+  dropout: 0.1
+  p_mod_drop: 0.15
+  text:
+    name: roberta-base
+    pooling: cls
+    dropout: 0.1
+  audio:
+    mode: finetune
+    name: microsoft/wavlm-base-plus
+    n_layers: 13
+    hidden_size: 768
+    head_hidden: 256
+    dropout: 0.2
+    unfreeze_top_n: 4
+    normalize_wav: null   # null = follow the HF preprocessor config
+    spec_augment: {enabled: true, mask_time_prob: 0.05, mask_time_length: 10}
+  # Template: src/train.py replaces {seed} with --seed (and re-roots runs/... under --runs-root), so seed 42
+  # starts from runs/text_roberta/42 and runs/audio_wavlm_ft/42. A missing run is an error.
+  init_from:
+    text: runs/text_roberta_gold/{seed}
+    audio: runs/audio_wavlm_ft/{seed}
+train:
+  batch_size: 16
+  grad_accum: 1
+  max_epochs: 15
+  patience: 3
+  lr_encoder: 2.0e-5
+  lr_head: 1.0e-3
+  weight_decay: 0.01
+  warmup_frac: 0.1
+  grad_clip: 1.0
+  class_weight: sqrt_inv
+  undersample: false       # true = PLAN 5 ablation: every class cut to the smallest class count (seeded)
+  loss: ce
+  max_text_tokens: 64
+  max_audio_s: 10
+  fp16: true
+  augment:
+    enabled: true
+    speed: {factors: [0.9, 1.1]}
+    noise: {snr_db: [10, 30]}

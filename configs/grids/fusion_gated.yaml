@@ -1,0 +1,11 @@
+# Hyper-parameter grid for model 7: lr_encoder x class-weight scheme x modality-dropout probability.
+# 2 x 2 x 3 = 12 configs. Both branches start from the unimodal runs of the same seed.
+family: fusion_gated
+base_config: configs/fusion_gated.yaml
+grid:
+  train.lr_encoder: [1.0e-5, 2.0e-5]
+  train.class_weight: [sqrt_inv, inv]
+  model.p_mod_drop: [0.0, 0.15, 0.3]
+init_from:
+  model.init_from.text: "{init_root}/text_roberta/{seed}"
+  model.init_from.audio: "{init_root}/audio_wavlm_ft/{seed}"

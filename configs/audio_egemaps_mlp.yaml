@@ -1,0 +1,17 @@
+# PLAN.md model 3: eGeMAPS (88 functionals, train-fit scaler) + small MLP (scikit-learn).
+name: audio_egemaps_mlp
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: gold
+  feature_root: data/processed/features
+  caches:
+    egemaps: {extractor: egemaps, version: v02-opensmile2.6.0}
+model:
+  type: egemaps_mlp
+  class_weight: sqrt_inv
+  hidden: [128]
+  alpha: 0.001
+  max_iter: 300
+train: {}

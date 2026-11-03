@@ -1,0 +1,30 @@
+# PLAN.md model 4: roberta-base fine-tuned on Whisper transcripts (main text condition).
+name: text_roberta
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: asr
+  feature_root: data/processed/features
+model:
+  type: text_roberta
+  name: roberta-base
+  pooling: cls
+  dropout: 0.1
+train:
+  batch_size: 16
+  grad_accum: 1
+  max_epochs: 15
+  patience: 3
+  lr_encoder: 2.0e-5
+  lr_head: 1.0e-3
+  weight_decay: 0.01
+  warmup_frac: 0.1
+  grad_clip: 1.0
+  class_weight: sqrt_inv   # sqrt_inv | inv | none
+  undersample: false       # true = PLAN 5 ablation: every class cut to the smallest class count (seeded)
+  loss: ce                 # ce | focal
+  max_text_tokens: 64
+  max_audio_s: 10
+  fp16: true               # cuda only
+  augment: {enabled: false}

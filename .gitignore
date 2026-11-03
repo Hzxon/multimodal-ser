@@ -7,3 +7,4 @@ data/processed/
 runs/
 *.tar.gz
 .DS_Store
+.claude/worktrees/

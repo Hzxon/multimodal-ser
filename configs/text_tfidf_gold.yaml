@@ -1,0 +1,14 @@
+# PLAN.md model 2, gold-transcript upper bound: TF-IDF + logistic regression on gold text.
+# Vectoriser: <feature_root>/tfidf_gold_gold/vectorizer.pkl, fit on train only.
+name: text_tfidf_gold
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: gold
+  feature_root: data/processed/features
+model:
+  type: tfidf_lr
+  class_weight: sqrt_inv
+  C: 1.0
+train: {}

@@ -67,9 +67,15 @@ def set_seed(seed: int) -> None:
 
 
 def git_commit() -> str:
+    """HEAD hash, with ``-dirty`` appended when the working tree has uncommitted changes
+    (``git status --porcelain`` non-empty), so the string identifies the code that ran."""
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
-        return out.stdout.strip() or "unknown"
+        head = out.stdout.strip()
+        if not head:
+            return "unknown"
+        st = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
+        return head + "-dirty" if st.returncode == 0 and st.stdout.strip() else head
     except Exception:
         return "unknown"
 

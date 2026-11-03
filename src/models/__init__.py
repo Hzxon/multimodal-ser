@@ -66,10 +66,10 @@ def load_run(run_dir: str | Path, device: str | torch.device = "cpu") -> tuple[n
     p = p if p.is_absolute() else ROOT / p
     cfg = load_yaml(p / "config.yaml")
     m = cfg["model"]
-    # unimodal checkpoints used for initialisation are not needed once best.pt exists
+    # checkpoints used for initialisation are not needed once best.pt exists
     m.pop("init_from", None)
-    if m["type"] == "audio_wavlm":
-        m.pop("init_from", None)
+    if isinstance(m.get("audio"), dict):
+        m["audio"].pop("init_from", None)
     model = build_model(cfg)
     ckpt = torch.load(p / "best.pt", map_location="cpu", weights_only=False)
     model.load_state_dict(ckpt["state_dict"])

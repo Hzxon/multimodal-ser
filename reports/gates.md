@@ -49,3 +49,45 @@ Findings and the design decisions they fix:
 ## Usability audit (2026-11-02)
 
 `reports/meld_usability_audit.md`: verdict, label-quality evidence, clip-segmentation defects measured on a dev-split audio mirror, published ceilings, alternatives, and the data policy (fragment exclusion, clean-test subset, no denoising, secondary evaluation on corrected labels) to ratify in Gate 1 once the official archive is extracted.
+
+## Gates 3–6 — implementation status (2026-11-03)
+
+Phases 3–7 are implemented and exercised end to end on the 48-row smoke manifests
+(`bash scripts/run_all.sh --smoke --skip-asr --device cpu`, 29 min on an M1 CPU, exit 0, 45 unit tests pass; log in
+`data/processed/smoke_runs/run_all.log`, reports under `data/processed/smoke_reports/`). The
+smoke numbers prove the plumbing, not the models: every gate below is re-evaluated on the full
+data when `bash scripts/run_all.sh` has run. Full-data artefacts built so far: eGeMAPS caches and
+the train-only scaler (`n_fit = 9639`), the gold TF-IDF vocabulary (10 813 terms; 99.99 % of
+train rows fit in 64 RoBERTa tokens, one truncated: `train_dia455_utt11`).
+
+| Gate | Script / evidence | Smoke status | Full-data status |
+|---|---|---|---|
+| F1, F2 | `scripts/check_asr.py`, `src/asr/quality.py` → `reports/gate3_asr.md`, `reports/asr_quality_<tag>.md` | PASS (8/8 identical re-transcriptions; WER train 23.6 / dev 27.4 / test 26.0 on 48 rows) | pending `src.asr.transcribe --split all` (whisper-small, about 3–4 h on M1) |
+| F3–F8 | `scripts/check_leakage.py --n 50` → `reports/gate3_features.md` | PASS, 0 WARN, 0 SKIP | **PASS on full data (2026-11-03)**: scaler `fit_split=train`, `n_fit=9639`; TF-IDF refit vocabulary identical (10 813 terms); 6/6 caches raise for the wrong split and match the manifest order; eGeMAPS 88 finite values on 9988/1108/2610 rows; WavLM (N,13,768) float16, no all-zero vector, per-layer L2 norm 2.2–4.3; recompute 150/150 eGeMAPS and 30/30 WavLM rows identical; log loudness vs EDA `rms_db` r = 0.90, F0 (semitones) vs EDA F0 median r = 0.80 (n = 13 443 voiced); clips cropped to 10 s: train 212 (2.1 %), dev 23 (2.1 %), test 48 (1.8 %) |
+| F6 | `tests/test_dataset.py::test_transforms_train_only`, `tests/test_augment.py` | PASS | same code path |
+| M1, M2 | `scripts/sanity_checks.py` → `reports/gate4_sanity.md` | PASS for text_roberta, audio_wavlm_cached, fusion_gated (99 % train accuracy by step 9 / 2 / 3; shuffled-label dev macro F1 0.045 / 0.045 / 0.086 inside the chance band [0.015, 0.148]) | pending `--steps 200` and 3-epoch shuffled-label runs on full data (5 families) |
+| M3, M4 | `src/train.py::assert_no_test_in_data_config`, `make_loader` refuses `test`; one dev evaluation per epoch counted in `metrics.json` | PASS | same code path |
+| M5–M9 | `src/evaluate.py summary` (seeds, M6 verdict row, M7 class-weight table from dev scores with the Section 5 rejection rule and the undersample arm, fusion family auto-selected on dev, M8 gain, M9 gap) | machinery runs; M6 and M8 FAIL on smoke (6-step models) | pending full runs |
+| M10 | `scripts/run_all.sh` | ran end to end in smoke mode | pending full mode (GPU job) |
+| V1–V6, V8 | `src/evaluate.py` → `reports/gate5_eval.md`, `reports/results.md`, `reports/error_analysis.csv` | V1–V4, V6 PASS (one test pass per run enforced on 14 runs; bootstrap CIs; McNemar for every fusion family; noise 20/10 dB on 5 models); V5 PARTIAL (2×2 complete for the text family and for `fusion_gated`/`fusion_gated_gold`; the auto-selected `fusion_xattn` has no gold-trained twin); V8 PARTIAL (12 errors on 16 smoke rows, manual columns empty) | pending full runs (30 errors); V8 manual columns to annotate; add `fusion_xattn_gold` if model 8 wins on dev |
+| V7 | `reports/literature.yaml` | FAIL until three cited MELD results are filled in | to do before the report |
+| X1–X6 | `src/explain.py` → `reports/xai/gate6_xai.md` | X1–X5 PASS in the end-to-end smoke run (X3 on mean |ρ|: text 0.216, audio below 0.3); X6 PARTIAL (8 of 11 cases on 16 test rows) | pending full runs; X3 text should be watched even then |
+
+Deviations from PLAN.md recorded so far: ASR transcripts are joined from
+`data/manifests/asr/<tag>/<split>.csv` at load time instead of being written into the frozen
+manifests; the eGeMAPS scaler lives next to its cache (`features/egemaps_<version>/scaler.pkl`),
+not at `features/scaler.pkl`; `requirements.txt` is replaced by `pyproject.toml` + `uv.lock`;
+SpecAugment is the WavLM encoder's own feature masking (`mask_time_prob`), active in train mode
+only; the WavLM cache is built with `--batch-size 1` because zero padding changes the embedding
+(group norm over time in the first conv layer).
+
+### F7 — encoder pretraining overlap (documented)
+
+WavLM-base-plus was pretrained self-supervised on Libri-Light (60 k h), GigaSpeech (10 k h)
+and VoxPopuli (24 k h) (Chen et al., "WavLM: Large-Scale Self-Supervised Pre-Training for Full
+Stack Speech Processing", arXiv:2110.13900); none of these carries MELD emotion labels.
+RoBERTa-base was pretrained on BookCorpus, English Wikipedia, CC-News, OpenWebText and Stories
+(Liu et al., arXiv:1907.11692), web text without MELD labels. No emotion-pretrained encoder
+(e.g. emotion2vec) is used. Whisper's training data is undisclosed and may contain Friends
+subtitles, so ASR quality on MELD may be optimistic compared with unseen audio (PLAN.md 1.1);
+the gold-transcript condition (V5) bounds the effect of that caveat on the text branch.

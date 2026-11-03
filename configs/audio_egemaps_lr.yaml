@@ -1,0 +1,15 @@
+# PLAN.md model 3: eGeMAPS (88 functionals, train-fit scaler) + logistic regression.
+name: audio_egemaps_lr
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: gold
+  feature_root: data/processed/features
+  caches:
+    egemaps: {extractor: egemaps, version: v02-opensmile2.6.0}
+model:
+  type: egemaps_lr
+  class_weight: sqrt_inv
+  C: 0.5
+train: {}

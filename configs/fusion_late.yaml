@@ -1,0 +1,15 @@
+# PLAN.md model 6: late fusion, w * p(audio) + (1 - w) * p(text), w searched on dev
+# (src/evaluate.py; src.models.fusion.late_fusion_probs). No training.
+name: fusion_late
+data:
+  manifest_dir: data/manifests
+  splits: {train: train, dev: dev}
+  asr_tag: whisper-small
+  text_source: asr
+  feature_root: data/processed/features
+model:
+  type: fusion_late
+  audio_run: audio_wavlm_ft
+  text_run: text_roberta
+  weight_grid: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+train: {}

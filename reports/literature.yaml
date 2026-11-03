@@ -1,0 +1,27 @@
+# Published MELD results for the literature table (PLAN.md 3.5, Gate V7).
+# TODO: every weighted_f1 below is a placeholder (null). Fill the numbers, split and citation
+# from the papers themselves before the report; `src/evaluate.py summary` marks V7 FAIL until
+# three entries have weighted_f1 and citation set. Use utterance-level results on the official
+# MELD test split and weighted F1 over the 7 emotion classes so the comparison is like for like.
+results:
+  - paper: "TODO: text-only RoBERTa-class MELD result"
+    year: null
+    model: roberta-base (utterance level, no dialogue context)
+    condition: text_only
+    weighted_f1: null
+    split: MELD test (official)
+    citation: "TODO: bibkey"
+  - paper: "TODO: audio-only MELD result (SSL encoder, e.g. WavLM / wav2vec 2.0)"
+    year: null
+    model: null
+    condition: audio_only
+    weighted_f1: null
+    split: MELD test (official)
+    citation: "TODO: bibkey"
+  - paper: "TODO: utterance-level multimodal (audio + text) MELD result without dialogue context"
+    year: null
+    model: null
+    condition: multimodal
+    weighted_f1: null
+    split: MELD test (official)
+    citation: "TODO: bibkey"
