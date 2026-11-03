@@ -51,7 +51,7 @@ can be exercised on the 48-row smoke manifests before any full run.
 
 ```bash
 bash scripts/run_all.sh                                  # full ladder, seeds 13 42 2024; log in runs/run_all_<timestamp>.log
-bash scripts/run_all.sh --skip-data --skip-asr --device cuda   # reuse manifests and the ASR cache
+bash scripts/run_all.sh --skip-data --skip-asr --device cuda   # reuse manifests and the local ASR cache (not in git; needs an earlier stage 1)
 bash scripts/run_all.sh --smoke --skip-asr --device cpu  # plumbing check on 48 rows per split, about 26 min on an M1 CPU
 ```
 

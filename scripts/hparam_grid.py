@@ -30,7 +30,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.common import load_yaml  # noqa: E402
+from src.common import load_yaml, set_nested  # noqa: E402
 
 MAX_CONFIGS = 12
 FAMILIES = ("text_roberta", "audio_wavlm_ft", "fusion_gated", "fusion_xattn")
@@ -41,14 +41,6 @@ SMOKE_REPORTS = "data/processed/smoke_reports"
 def yaml_scalar(v) -> str:
     """One-line YAML text of a scalar that ``yaml.safe_load`` reads back as the same value."""
     return yaml.safe_dump(v, default_flow_style=True).splitlines()[0]
-
-
-def set_nested(cfg: dict, dotted: str, value) -> None:
-    d = cfg
-    keys = dotted.split(".")
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    d[keys[-1]] = value
 
 
 def get_nested(cfg: dict, dotted: str):
@@ -79,7 +71,8 @@ def read_dev(run_dir: Path) -> dict | None:
 
 
 def run_matches(run_dir: Path, overrides: dict) -> bool:
-    """True when the run's stored config already carries every override of this grid point."""
+    """True when the run's stored config already carries every expected value: the grid point,
+    the init_from paths and the CLI step budget / data paths."""
     p = run_dir / "config.yaml"
     if not p.exists() or not (run_dir / "metrics.json").exists():
         return False
@@ -134,6 +127,12 @@ def main() -> int:
     points = points[: a.max_configs]
     base_cfg = load_yaml(spec["base_config"])
     init_over = {k: v.format(init_root=init_root, seed=a.seed) for k, v in (spec.get("init_from") or {}).items()}
+    # CLI values that src.train writes into config.yaml (a CLI flag beats a --set of the same key); a stored run
+    # is reused only when these match too, so a run with another step budget or other manifests is retrained
+    cli = {"data.manifest_dir": a.manifest_dir, "data.feature_root": a.feature_root, "train.max_steps": a.max_steps,
+           "train.max_epochs": a.max_epochs, "train.batch_size": a.batch_size}
+    cli_defaults = {k: get_nested(base_cfg, k) for k, v in cli.items() if v is None}
+    cli_given = {k: v for k, v in cli.items() if v is not None}
     print(f"family {a.family}: {len(points)} config(s) from {grid_path}, seed {a.seed}, runs under {runs_root}")
 
     rows = []
@@ -152,7 +151,7 @@ def main() -> int:
         print(f"[g{i}] {desc}\n  $ {' '.join(cmd)}", flush=True)
         if a.dry_run:
             continue
-        if not a.force and run_matches(run_dir, {**init_over, **point}):
+        if not a.force and run_matches(run_dir, {**cli_defaults, **init_over, **point, **cli_given}):
             print(f"  reusing {run_dir / 'metrics.json'} (config matches; --force to retrain)")
         else:
             t0 = time.time()

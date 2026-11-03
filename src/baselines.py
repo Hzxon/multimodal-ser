@@ -24,11 +24,11 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
-from src.common import EMOTIONS, NUM_CLASSES, ROOT, git_commit, load_yaml, run_dir, set_seed, write_json
+from src.common import (EMOTIONS, NUM_CLASSES, ROOT, classification_scores, git_commit, load_yaml, run_dir, set_nested,
+                        set_seed, write_json)
 from src.data.dataset import class_weights, load_manifest
 from src.features.cache import align, cache_path, load_cache
 
@@ -144,22 +144,6 @@ class BaselineModel:
         return out
 
 
-def scores(y: np.ndarray, pred: np.ndarray) -> dict:
-    labels = list(range(NUM_CLASSES))
-    pc = f1_score(y, pred, labels=labels, average=None, zero_division=0)
-    return {"weighted_f1": float(f1_score(y, pred, labels=labels, average="weighted", zero_division=0)),
-            "macro_f1": float(f1_score(y, pred, labels=labels, average="macro", zero_division=0)),
-            "accuracy": float(accuracy_score(y, pred)), "per_class_f1": {e: float(v) for e, v in zip(EMOTIONS, pc)}}
-
-
-def set_nested(cfg: dict, dotted: str, value: Any) -> None:
-    d = cfg
-    keys = dotted.split(".")
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    d[keys[-1]] = value
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -206,8 +190,8 @@ def main() -> None:
     p_train = model.predict_proba(train_df, splits["train"])
     p_dev = model.predict_proba(dev_df, splits["dev"])
     y_dev = dev_df["label"].to_numpy()
-    dev = scores(y_dev, p_dev.argmax(1))
-    tr = scores(train_df["label"].to_numpy(), p_train.argmax(1))
+    dev = classification_scores(y_dev, p_dev.argmax(1))
+    tr = classification_scores(train_df["label"].to_numpy(), p_train.argmax(1))
     pred = pd.DataFrame({"utt_id": dev_df["utt_id"], "label": y_dev, "pred": p_dev.argmax(1)})
     for c in range(NUM_CLASSES):
         pred[f"p_{c}"] = p_dev[:, c]

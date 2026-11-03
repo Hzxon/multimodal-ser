@@ -6,7 +6,7 @@ Usage: python -m src.train --config configs/<name>.yaml [--seed 13] [--manifest-
        [--shuffle-labels] [--overfit-batch]
 
 Writes runs/<name>/<seed>/{config.yaml, metrics.json, predictions.csv, best.pt, git_commit.txt}.
-``git_commit.txt`` holds HEAD plus ``-dirty`` when the working tree has uncommitted changes.
+``git_commit.txt`` holds HEAD plus ``-dirty`` when the code (``src.common.CODE_PATHS``) has uncommitted changes.
 Config templates: every ``init_from`` string may contain ``{seed}`` (replaced by ``--seed``) and
 ``{runs_root}`` (``--runs-root``, default ``runs``); a templated ``runs/...`` path is re-rooted
 under ``--runs-root`` when that is not ``runs``. ``train.undersample: true`` is the PLAN 5
@@ -31,23 +31,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
-from sklearn.metrics import accuracy_score, f1_score
 
-from src.common import EMOTIONS, NUM_CLASSES, ROOT, device_name, git_commit, load_yaml, run_dir, set_seed, write_json
+from src.common import (EMOTIONS, NUM_CLASSES, ROOT, classification_scores, device_name, git_commit, load_yaml, run_dir,
+                        set_nested, set_seed, write_json)
 from src.data.dataset import class_weights
 from src.data.torch_dataset import load_split_df, make_loader
 from src.models import build_model, split_param_groups, tokenizer_name
 
 
 # ----------------------------------------------------------------------------- config
-
-def set_nested(cfg: dict, dotted: str, value: Any) -> None:
-    keys = dotted.split(".")
-    d = cfg
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    d[keys[-1]] = value
-
 
 def substitute_init_from(value: Any, seed: int, runs_root: str | None = None) -> Any:
     """Resolve ``{seed}`` / ``{runs_root}`` in an ``init_from`` value (str, or nested dict/list of str).
@@ -229,17 +221,6 @@ def warmup_cosine(step: int, total: int, warmup: int) -> float:
     return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
 
 
-def metrics_from(y: np.ndarray, pred: np.ndarray) -> dict:
-    labels = list(range(NUM_CLASSES))
-    per_class = f1_score(y, pred, labels=labels, average=None, zero_division=0)
-    return {
-        "weighted_f1": float(f1_score(y, pred, labels=labels, average="weighted", zero_division=0)),
-        "macro_f1": float(f1_score(y, pred, labels=labels, average="macro", zero_division=0)),
-        "accuracy": float(accuracy_score(y, pred)),
-        "per_class_f1": {e: float(v) for e, v in zip(EMOTIONS, per_class)},
-    }
-
-
 class DeterminismLog:
     """Collects the names of ops that fall back to non-deterministic kernels."""
 
@@ -370,14 +351,18 @@ def train(cfg: dict, out: Path, runs_root: Path | None) -> dict:
             ep0 = time.time()
             losses, y_true, y_pred = [], [], []
             opt.zero_grad(set_to_none=True)
+            n_batches = len(train_loader)
             for i, batch in enumerate(train_loader):
-                s0 = time.time()
+                if i % accum == 0:  # first micro-batch of an optimiser step
+                    s0 = time.time()
+                    # the last group of an epoch can be shorter than accum; average over its real size
+                    group = min(accum, n_batches - i)
                 batch = to_device(batch, device)
                 with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
                     logits = model(batch)
-                    loss = loss_fn(logits.float(), batch["label"]) / accum
+                    loss = loss_fn(logits.float(), batch["label"]) / group
                 scaler.scale(loss).backward()
-                losses.append(float(loss.detach()) * accum)
+                losses.append(float(loss.detach()) * group)
                 y_true.append(batch["label"].cpu().numpy())
                 y_pred.append(logits.detach().argmax(-1).cpu().numpy())
                 if (i + 1) % accum == 0 or (i + 1) == len(train_loader):
@@ -391,11 +376,11 @@ def train(cfg: dict, out: Path, runs_root: Path | None) -> dict:
                     step_times.append(time.time() - s0)
                     if step >= total_steps:
                         break
-            tr = metrics_from(np.concatenate(y_true), np.concatenate(y_pred))
+            tr = classification_scores(np.concatenate(y_true), np.concatenate(y_pred))
             # Gate M4: exactly one dev evaluation per epoch
             ids, probs, labels = predict(model, dev_loader, device, use_amp)
             dev_evals += 1
-            dv = metrics_from(labels, probs.argmax(1))
+            dv = classification_scores(labels, probs.argmax(1))
             rec = {"epoch": epoch, "step": step, "train_loss": float(np.mean(losses)),
                    "train_weighted_f1": tr["weighted_f1"], "train_macro_f1": tr["macro_f1"], "train_accuracy": tr["accuracy"],
                    "dev_weighted_f1": dv["weighted_f1"], "dev_macro_f1": dv["macro_f1"], "dev_accuracy": dv["accuracy"],
@@ -403,7 +388,7 @@ def train(cfg: dict, out: Path, runs_root: Path | None) -> dict:
             history.append(rec)
             print(f"epoch {epoch} step {step} loss {rec['train_loss']:.4f} train wF1 {tr['weighted_f1']:.3f} "
                   f"dev wF1 {dv['weighted_f1']:.3f} dev mF1 {dv['macro_f1']:.3f} ({rec['epoch_seconds']:.1f}s, "
-                  f"{np.mean(step_times[-len(train_loader):]):.2f}s/step)")
+                  f"{np.mean(step_times[-steps_per_epoch:]):.2f}s/step)")
             if dv["weighted_f1"] > best["dev_weighted_f1"]:
                 best = {"dev_weighted_f1": dv["weighted_f1"], "dev_macro_f1": dv["macro_f1"], "dev_accuracy": dv["accuracy"],
                         "dev_per_class_f1": dv["per_class_f1"], "train_weighted_f1": tr["weighted_f1"], "epoch": epoch, "step": step}
@@ -446,7 +431,8 @@ def train(cfg: dict, out: Path, runs_root: Path | None) -> dict:
 
 def overfit_batch(cfg: dict, out: Path) -> dict:
     """Gate M1: one fixed batch, up to ``max_steps`` optimiser steps, report when train
-    accuracy on that batch reaches 99 %. Data augmentation and SpecAugment are off."""
+    accuracy on that batch reaches 99 %. Data augmentation, SpecAugment and the fusion models'
+    modality dropout are off (dropout layers stay on)."""
     t0 = time.time()
     tcfg, dcfg = cfg["train"], cfg["data"]
     assert_no_test_in_data_config(dcfg)
@@ -463,6 +449,8 @@ def overfit_batch(cfg: dict, out: Path) -> dict:
     enc = getattr(model, "encoder", None) if cfg["model"]["type"] == "audio_wavlm" else getattr(getattr(model, "audio", None), "encoder", None)
     if enc is not None and hasattr(enc, "config"):
         enc.config.apply_spec_augment = False
+    if hasattr(model, "p_mod_drop"):  # random modality zeroing would make the fixed batch a moving target
+        model.p_mod_drop = 0.0
     bs = int(tcfg.get("batch_size", 16))
     loader, ds = make_loader(dcfg["splits"]["train"], cfg, train=True, seed=seed, batch_size=bs,
                              feature_root=dcfg.get("feature_root"), tokenizer=tokenizer, limit=dcfg.get("limit"))
@@ -504,7 +492,7 @@ def overfit_batch(cfg: dict, out: Path) -> dict:
            "batch_size": int(batch["label"].shape[0]), "max_steps": max_steps, "steps_run": len(curve),
            "step_reached_99": reached, "final_train_accuracy": final_acc, "best_train_accuracy": max(c["train_accuracy"] for c in curve),
            "curve": curve, "seconds_per_step": float(np.mean(step_times)), "augmentation_disabled": True,
-           "nondeterministic_ops": sorted(det.messages), "wall_seconds": time.time() - t0}
+           "modality_dropout_disabled": hasattr(model, "p_mod_drop"), "nondeterministic_ops": sorted(det.messages), "wall_seconds": time.time() - t0}
     print(f"[M1] {cfg['name']}: reached 99% at step {reached}, final acc {final_acc:.3f}, {res['seconds_per_step']:.2f}s/step")
     return res
 

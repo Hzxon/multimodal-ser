@@ -12,7 +12,8 @@
 #            pseudo-run. Other evaluate runs read the tag from the run's own config.yaml.
 # Stages: 0 data pipeline, 1 ASR, 2 features, 3 baselines (models 0-3), 4 training (models 4, 5, 7, 8 and the
 #         gold-text twins), 5 sanity checks M1/M2, 6 ablations M7 (class weights) + undersampling (PLAN 5),
-#         7 evaluation, 8 explanations, 9 pytest.
+#         7 evaluation (full mode skips runs that already have test_metrics.json, so a failed stage 7
+#         resumes on re-run), 8 explanations, 9 pytest.
 # Full mode writes runs/ and reports/ and logs to runs/run_all_<timestamp>.log. --smoke uses the 48-row
 # manifests under data/processed/smoke_manifests, one seed, a few optimiser steps, and writes
 # data/processed/smoke_runs/, data/processed/smoke_reports/ and data/processed/smoke_runs/run_all.log.
@@ -216,7 +217,8 @@ else
   say "Estimated runtime (full ladder). THE FULL LADDER IS A GPU JOB."
   say "  Timings measured on an Apple M1 (mps); T4 figures only where measured or stated."
   say "  stage 0 data pipeline            ~30-60 min (archive extraction, 13 715 clips to 16 kHz WAV, EDA)"
-  say "  stage 1 whisper-small ASR        0.7-1.0 s/clip x 13 715 clips = 3-4 h on M1; the reproducible cache is the committed asr/ CSVs"
+  say "  stage 1 whisper-small ASR        0.7-1.0 s/clip x 13 715 clips = 3-4 h on M1; the cache is <manifest dir>/asr/<tag>/*.csv"
+  say "                                   (local, not in git: --skip-asr needs a previous stage-1 run on this machine)"
   say "  stage 2 features                 eGeMAPS ~3 min (6 jobs), WavLM cache (batch size 1) ~20 min or more, TF-IDF seconds"
   say "  stage 3 baselines                a few minutes per seed"
   say "  stage 4 training, per seed (early stopping, assuming ~6 of the 15 epochs):"
@@ -225,7 +227,8 @@ else
   say "      audio_wavlm_ft                    50 min/epoch on M1       -> ~5 h"
   say "      fusion_gated, fusion_gated_gold, fusion_xattn   3 h/epoch on M1  -> ~18 h each; on a T4 8-10 min/epoch -> ~1 h each"
   say "  stage 5 sanity checks (M1, M2)   ~1-2 h on a GPU"
-  say "  stage 6 ablations (seed 13)      3 extra text_roberta + 3 extra fusion_gated runs + 1 undersampled text_roberta (fewer rows, cheaper)"
+  say "  stage 6 ablations (seed 13)      3 arms x (text_roberta + audio_wavlm_cached + audio_wavlm_ft + fusion_gated) + 1 undersampled"
+  say "                                   text_roberta (fewer rows, cheaper); the 3 extra audio_wavlm_ft runs alone take ~15 h on M1"
   say "  stage 7 evaluation               one test pass per run plus noise/transcript conditions, ~1 h on a GPU"
   say "  stage 8 explanations (n=200)     ~30-60 min on a GPU"
   say "  stage 9 pytest                   under a minute"
@@ -248,6 +251,21 @@ if begin_stage 1 "ASR: transcribe all splits, quality report, check_asr (tag $AS
   run $PY -m src.asr.quality --tag "$ASR_TAG" ${MDIR:+--manifest-dir "$MDIR"}
   run_check $PY scripts/check_asr.py --tag "$ASR_TAG" --n "$CHECK_N" ${MDIR:+--manifest-dir "$MDIR"} ${DEV_ARGS[@]+"${DEV_ARGS[@]}"}
   end_stage
+fi
+# The ASR transcripts are a local cache (not in git). Without stage 1 they must exist from an earlier run,
+# otherwise every ASR-text stage fails later with a less obvious error.
+ASR_DIR=${MDIR:-$($PY -c "import yaml; print(yaml.safe_load(open('configs/data.yaml'))['manifest_dir'])")}/asr/$ASR_TAG
+missing_asr=""
+for split in train dev test; do [ -f "$ASR_DIR/$split.csv" ] || missing_asr="$missing_asr $split"; done
+needs_asr=0
+for n in 2 3 4 5 6 7 8; do
+  if [ -z "$(skip_reason "$n")" ]; then needs_asr=1; fi
+done
+if [ -n "$missing_asr" ] && [ "$needs_asr" = 1 ]; then
+  say "no ASR transcripts for tag $ASR_TAG (missing$missing_asr under $ASR_DIR); they are not in git."
+  say "Run stage 1 (drop --skip-asr) to create them."
+  summary
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------- stage 2: features
@@ -297,15 +315,25 @@ if begin_stage 5 "sanity checks M1 (overfit one batch) and M2 (shuffled labels),
 fi
 
 # ---------------------------------------------------------------------------- stage 6: ablations
-if begin_stage 6 "ablations on seed $ABL_SEED: class weights M7 (text_roberta, fusion_gated), undersampling (text_roberta)"; then
-  # fusion_gated's init_from template resolves to the seed-$ABL_SEED stage-4 runs under --runs-root
-  for fam in text_roberta fusion_gated; do
-    run $PY -m src.train --config "configs/$fam.yaml" --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
-      --set train.class_weight=none --name "${fam}_cwnone"
-    run $PY -m src.train --config "configs/$fam.yaml" --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
-      --set train.class_weight=inv --name "${fam}_cwinv"
-    run $PY -m src.train --config "configs/$fam.yaml" --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
-      --set train.loss=focal --name "${fam}_cwfocal"
+if begin_stage 6 "ablations on seed $ABL_SEED: class weights M7 (text_roberta, audio_wavlm_cached, audio_wavlm_ft, fusion_gated), undersampling (text_roberta)"; then
+  # Every arm uses the same loss scheme along its whole init chain (audio_wavlm_cached -> audio_wavlm_ft
+  # -> fusion_gated, text_roberta -> fusion_gated), so fusion_gated_cwnone starts from unweighted
+  # unimodal runs instead of the class-weighted stage-4 runs. The {seed} templates are resolved under --runs-root.
+  for arm in cwnone cwinv cwfocal; do
+    case "$arm" in
+      cwnone) ARM_SET=(--set train.class_weight=none) ;;
+      cwinv) ARM_SET=(--set train.class_weight=inv) ;;
+      cwfocal) ARM_SET=(--set train.loss=focal) ;;
+    esac
+    run $PY -m src.train --config configs/text_roberta.yaml --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
+      "${ARM_SET[@]}" --name "text_roberta_$arm"
+    run $PY -m src.train --config configs/audio_wavlm_cached.yaml --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
+      "${ARM_SET[@]}" --name "audio_wavlm_cached_$arm"
+    run $PY -m src.train --config configs/audio_wavlm_ft.yaml --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
+      "${ARM_SET[@]}" --set "model.init_from=runs/audio_wavlm_cached_$arm/{seed}" --name "audio_wavlm_ft_$arm"
+    run $PY -m src.train --config configs/fusion_gated.yaml --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
+      "${ARM_SET[@]}" --set "model.init_from.text=runs/text_roberta_$arm/{seed}" \
+      --set "model.init_from.audio=runs/audio_wavlm_ft_$arm/{seed}" --name "fusion_gated_$arm"
   done
   # PLAN 5: one undersampled run, only to show the cost of discarding majority-class data
   run $PY -m src.train --config configs/text_roberta.yaml --seed "$ABL_SEED" "${TRAIN_ARGS[@]}" \
@@ -324,9 +352,19 @@ if begin_stage 7 "evaluation: one test pass per run, late-fusion pseudo-run, sum
       find "$RUNS" -maxdepth 3 \( -name test_metrics.json -o -name test_predictions.csv \) -not -path "*/sanity/*" -delete
       rm -rf "$RUNS/fusion_late"
     fi
+    # Full mode: a run that already has test_metrics.json keeps its single test pass (Gate V1) and is
+    # skipped, so the stage can be re-run after a failure and resumes with the runs not yet evaluated.
+    already_evaluated() {
+      if [ "$SMOKE" != 1 ] && [ -f "$1/test_metrics.json" ]; then
+        note_skip "already evaluated, kept: $1"
+        return 0
+      fi
+      return 1
+    }
     for seed in $SEEDS; do
       for name in majority shortcut_lr text_tfidf text_tfidf_gold audio_egemaps_lr audio_egemaps_mlp \
                   text_roberta text_roberta_gold audio_wavlm_cached audio_wavlm_ft fusion_gated fusion_xattn fusion_gated_gold; do
+        already_evaluated "$RUNS/$name/$seed" && continue
         EXTRA=()
         case "$name" in text_roberta|text_roberta_gold|fusion_gated|fusion_xattn|fusion_gated_gold) EXTRA+=(--text-conditions) ;; esac
         case "$name" in audio_wavlm_ft|fusion_gated|fusion_xattn|fusion_gated_gold) EXTRA+=(--noise-snr 20,10) ;; esac
@@ -334,6 +372,7 @@ if begin_stage 7 "evaluation: one test pass per run, late-fusion pseudo-run, sum
       done
       # late fusion (model 6): src.evaluate builds the pseudo-run from configs/fusion_late.yaml and the two component runs
       # (--set only matters for this pseudo-run: other runs carry their resolved asr_tag in config.yaml)
+      already_evaluated "$RUNS/fusion_late/$seed" && continue
       run $PY -m src.evaluate run --run "$RUNS/fusion_late/$seed" ${EVAL_ARGS[@]+"${EVAL_ARGS[@]}"} "${ASR_SET[@]}"
     done
     run $PY -m src.evaluate summary --runs-root "$RUNS" --out "$REPORTS/results.md" \

@@ -45,7 +45,8 @@ import yaml
 from scipy import stats
 from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support
 
-from src.common import EMOTIONS, LABEL2ID, NUM_CLASSES, ROOT, device_name, git_commit, load_yaml, write_json
+from src.common import (EMOTIONS, LABEL2ID, NUM_CLASSES, ROOT, device_name, git_commit, load_yaml, rel_path, set_nested,
+                        write_json)
 from src.data.dataset import asr_path, load_manifest
 
 LADDER = ["majority", "shortcut_lr", "text_tfidf", "text_tfidf_gold", "audio_egemaps_lr", "audio_egemaps_mlp",
@@ -316,7 +317,7 @@ def evaluate_late(run: Path, cfg: dict, args: argparse.Namespace) -> dict:
     predictions_frame(dev_m["utt_id"].tolist(), y_dev, p_dev).to_csv(run / "predictions.csv", index=False)
     write_json(run / "metrics.json", {
         "name": cfg["name"], "seed": int(seed), "type": "fusion_late", "weight_audio": w, "weight_grid": grid_rows,
-        "audio_run": str(audio_run.relative_to(ROOT)), "text_run": str(text_run.relative_to(ROOT)),
+        "audio_run": rel_path(audio_run), "text_run": rel_path(text_run),
         "dev": {"weighted_f1": dev["weighted_f1"], "macro_f1": dev["macro_f1"], "accuracy": dev["accuracy"],
                 "per_class_f1": {e: v["f1"] for e, v in dev["per_class"].items()}},
         "n_dev": int(len(y_dev)), "dev_evaluations": len(grid_rows), "git_commit": git_commit()})
@@ -358,11 +359,7 @@ def evaluate_run(args: argparse.Namespace) -> dict:
         assert cfg0["model"]["type"] == "fusion_late", f"{run} has no config.yaml and {args.config} is not a fusion_late config"
         for kv in args.set or []:
             k, v = kv.split("=", 1)
-            d = cfg0
-            keys = k.split(".")
-            for kk in keys[:-1]:
-                d = d.setdefault(kk, {})
-            d[keys[-1]] = yaml.safe_load(v)
+            set_nested(cfg0, k, yaml.safe_load(v))
         (run / "config.yaml").write_text(yaml.safe_dump(cfg0, sort_keys=False))
     cfg = copy.deepcopy(load_yaml(run / "config.yaml"))
     out_json = run / "test_metrics.json"
@@ -384,7 +381,7 @@ def evaluate_run(args: argparse.Namespace) -> dict:
     trained_on = cfg["data"].get("text_source", "gold")
     modality = model_modality(cfg)
     res: dict[str, Any] = {"name": cfg["name"], "seed": int(run.name) if run.name.isdigit() else run.name,
-                           "run_dir": str(run.relative_to(ROOT)) if run.is_relative_to(ROOT) else str(run), "kind": kind,
+                           "run_dir": rel_path(run), "kind": kind,
                            "model_type": cfg["model"]["type"], "modality": modality, "text_source": trained_on,
                            "asr_tag": cfg["data"].get("asr_tag"), "limit": args.limit, "device": device}
     if kind == "late":

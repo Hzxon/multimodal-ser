@@ -8,10 +8,10 @@ decoding code reused from src/asr/transcribe.py) -> fusion model from ``--run`` 
 probabilities. If the fusion checkpoint is missing, the demo falls back to a text-only run
 (``text_roberta`` of the same seed under the same runs root) and says so in the UI.
 
-Explanations (``explain`` below; the demo has its own minimal helpers until src/explain.py is the shared
-implementation):
+Explanations (``explain`` below; the attribution code is src/explain.py's ``TextExplainer`` and
+``AudioOccluder``, so the demo matches the Phase 6 report):
 - token heat-map: Integrated Gradients (captum) over the RoBERTa input embeddings, audio branch fixed,
-  target = predicted class probability, baseline = pad embedding with the special tokens kept. Supported
+  target = predicted class logit, baseline = pad embedding with the special tokens kept. Supported
   for ``fusion_gated`` and ``text_roberta`` runs.
 - audio saliency: drop in the predicted-class probability when a 250 ms window is replaced by silence
   (finetune-mode audio only; cached mode shows a note).
@@ -27,16 +27,17 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.asr.transcribe import Transcriber, resolve_model  # noqa: E402
 from src.common import EMOTIONS, load_yaml, normalize_text  # noqa: E402
+from src.explain import WINDOW_S, AudioOccluder, TextExplainer  # noqa: E402
 from src.models import load_run, tokenizer_name  # noqa: E402
 
 SR = 16000
-WINDOW_S = 0.25
 IG_STEPS = 24
 
 
@@ -122,40 +123,40 @@ def probs_of(model, batch: dict, **kw) -> np.ndarray:
 
 # ----------------------------------------------------------------------------- explanations
 
-def ig_tokens(state: dict, batch: dict, target: int) -> tuple[list[str], np.ndarray]:
-    """Integrated Gradients per token of the transcript, normalised to [-1, 1] by the largest magnitude."""
-    from captum.attr import IntegratedGradients
+class FixedAudioText(nn.Module):
+    """Text-model view of a ``GatedFusion`` with the audio embedding of one clip held fixed, so
+    ``src.explain.TextExplainer`` attributes the fused prediction to the transcript tokens."""
 
-    model, tok = state["model"], state["tokenizer"]
-    text_model = model if state["kind"] == "text_roberta" else model.text
-    ids, mask = batch["input_ids"], batch["attention_mask"]
-    emb_layer = text_model.input_embeddings()
-    with torch.no_grad():
-        emb = emb_layer(ids)
-        base = emb_layer(torch.full_like(ids, tok.pad_token_id))
-        special = torch.tensor(tok.get_special_tokens_mask(ids[0].tolist(), already_has_special_tokens=True), device=ids.device).bool()
-        base[0, special] = emb[0, special]
-        if state["kind"] == "fusion_gated":
-            h_a = model.proj_a(model.encode_audio(batch))
+    def __init__(self, fusion: nn.Module, audio_batch: dict):
+        super().__init__()
+        self.fusion = fusion
+        with torch.no_grad():
+            self.h_a = fusion.proj_a(fusion.encode_audio(audio_batch))
 
-    def f(inputs_embeds: torch.Tensor) -> torch.Tensor:
-        n = inputs_embeds.shape[0]
-        m = mask.expand(n, -1)
-        if state["kind"] == "text_roberta":
-            logits = model.forward_from_embeds(inputs_embeds, m)
-        else:
-            seq = model.text.encoder(inputs_embeds=inputs_embeds, attention_mask=m).last_hidden_state
-            h_t = model.proj_t(model.text._pool(seq, m))
-            logits = model.fuse(h_a.expand(n, -1), h_t)
-        return torch.softmax(logits, dim=-1)
+    def input_embeddings(self) -> nn.Embedding:
+        return self.fusion.text.input_embeddings()
 
-    model.eval()
-    attr = IntegratedGradients(f).attribute(emb, baselines=base, target=target, n_steps=IG_STEPS, internal_batch_size=8)
-    score = attr.sum(-1)[0].detach().cpu().numpy()
-    score = np.where(special.cpu().numpy(), 0.0, score)
+    def forward_from_embeds(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        text = self.fusion.text
+        seq = text.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask).last_hidden_state
+        h_t = self.fusion.proj_t(text._pool(seq, attention_mask))
+        return self.fusion.fuse(self.h_a.expand(inputs_embeds.shape[0], -1), h_t)
+
+    def forward(self, batch: dict) -> torch.Tensor:
+        return self.forward_from_embeds(self.input_embeddings()(batch["input_ids"]), batch["attention_mask"])
+
+
+def ig_tokens(state: dict, batch: dict, text: str, target: int) -> tuple[list[str], np.ndarray]:
+    """Integrated Gradients per token of the transcript (``src.explain.TextExplainer``: logits of the
+    predicted class, pad baseline, special tokens kept), normalised to [-1, 1] by the largest magnitude."""
+    model = state["model"]
+    text_model = model if state["kind"] == "text_roberta" else FixedAudioText(model, batch)
+    texp = TextExplainer(text_model, state["tokenizer"], state["device"], n_steps=IG_STEPS,
+                         max_len=state["max_text_tokens"], internal_batch=8)
+    ex = texp.explain(text, target=target)
+    score = np.where(ex["special"], 0.0, ex["attr"])
     score = score / (np.abs(score).max() + 1e-12)
-    tokens = [t.replace("Ġ", " ") for t in tok.convert_ids_to_tokens(ids[0].tolist())]
-    return tokens, score
+    return [t.replace("Ġ", " ") for t in ex["tokens"]], score
 
 
 def tokens_to_html(tokens: list[str], score: np.ndarray) -> str:
@@ -173,24 +174,12 @@ def tokens_to_html(tokens: list[str], score: np.ndarray) -> str:
     return '<div style="font-size:18px;line-height:2.1;font-family:sans-serif">' + "".join(spans) + "</div>" + legend
 
 
-def occlusion_saliency(state: dict, batch: dict, target: int, base_p: float, batch_size: int = 8) -> np.ndarray:
-    """Drop in the predicted-class probability per 250 ms window replaced by silence (finetune audio only)."""
-    model = state["model"]
-    wav = batch["wav"]
-    step = int(WINDOW_S * SR)
-    n_win = int(np.ceil(wav.shape[1] / step))
-    out = np.zeros(n_win, dtype=np.float32)
-    for s in range(0, n_win, batch_size):
-        idx = list(range(s, min(n_win, s + batch_size)))
-        w = wav.repeat(len(idx), 1)
-        for r, k in enumerate(idx):
-            w[r, k * step:(k + 1) * step] = 0.0
-        b = {"input_ids": batch["input_ids"].expand(len(idx), -1), "attention_mask": batch["attention_mask"].expand(len(idx), -1),
-             "wav": w, "wav_mask": torch.ones_like(w, dtype=torch.bool)}
-        with torch.no_grad():
-            p = torch.softmax(model(b).float(), dim=-1)[:, target].cpu().numpy()
-        out[idx] = base_p - p
-    return out
+def occlusion_saliency(state: dict, batch: dict, target: int, batch_size: int = 8) -> np.ndarray:
+    """Drop in the predicted-class probability per 250 ms window replaced by silence (finetune audio only;
+    ``src.explain.AudioOccluder`` with the transcript ids held fixed)."""
+    occ = AudioOccluder(state["model"], state["device"], batch_size,
+                        extra={"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"]})
+    return occ.explain(torch.from_numpy(state["wav_used"]), target=target)["saliency"].astype(np.float32)
 
 
 def explain(state: dict, wav: np.ndarray, text: str) -> dict:
@@ -204,7 +193,7 @@ def explain(state: dict, wav: np.ndarray, text: str) -> dict:
     if state["note"]:
         res["notes"].append(state["note"])
     if kind in ("fusion_gated", "text_roberta"):
-        tokens, score = ig_tokens(state, batch, target)
+        tokens, score = ig_tokens(state, batch, text, target)
         res["heatmap_html"] = tokens_to_html(tokens, score)
     else:
         res["notes"].append("Token heat-map is implemented for fusion_gated and text_roberta runs only.")
@@ -216,7 +205,7 @@ def explain(state: dict, wav: np.ndarray, text: str) -> dict:
                            "text_zeroed": float(probs_of(model, batch, drop_text=True)[target]),
                            "full": float(probs[target])}
         if state["audio_mode"] == "finetune":
-            res["saliency"] = occlusion_saliency(state, batch, target, float(probs[target]))
+            res["saliency"] = occlusion_saliency(state, batch, target)
         else:
             res["notes"].append("Audio saliency needs a fusion run with audio.mode: finetune; skipped for cached audio features.")
     else:

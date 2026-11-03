@@ -66,18 +66,52 @@ def set_seed(seed: int) -> None:
         pass
 
 
+# paths whose uncommitted changes make ``git_commit`` report ``-dirty``: the code and its
+# configuration. Pipeline outputs (reports/, the local ASR cache under data/manifests/asr/) are left out
+# because every stage rewrites them.
+CODE_PATHS = ("src", "scripts", "configs", "app", "tests", "pyproject.toml", "uv.lock")
+
+
 def git_commit() -> str:
-    """HEAD hash, with ``-dirty`` appended when the working tree has uncommitted changes
-    (``git status --porcelain`` non-empty), so the string identifies the code that ran."""
+    """HEAD hash, with ``-dirty`` appended when ``CODE_PATHS`` have uncommitted changes
+    (``git status --porcelain -- CODE_PATHS`` non-empty), so the string identifies the code that ran."""
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
         head = out.stdout.strip()
         if not head:
             return "unknown"
-        st = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
+        st = subprocess.run(["git", "status", "--porcelain", "--", *CODE_PATHS], cwd=ROOT, capture_output=True, text=True)
         return head + "-dirty" if st.returncode == 0 and st.stdout.strip() else head
     except Exception:
         return "unknown"
+
+
+def set_nested(cfg: dict, dotted: str, value: Any) -> None:
+    """``cfg["a"]["b"] = value`` for ``dotted == "a.b"``, creating the dicts on the way (``--set``)."""
+    d = cfg
+    keys = dotted.split(".")
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    d[keys[-1]] = value
+
+
+def classification_scores(y: np.ndarray, pred: np.ndarray) -> dict:
+    """Weighted / macro F1 and accuracy over all ``NUM_CLASSES`` labels, plus per-class F1."""
+    from sklearn.metrics import accuracy_score, f1_score
+
+    labels = list(range(NUM_CLASSES))
+    per_class = f1_score(y, pred, labels=labels, average=None, zero_division=0)
+    return {
+        "weighted_f1": float(f1_score(y, pred, labels=labels, average="weighted", zero_division=0)),
+        "macro_f1": float(f1_score(y, pred, labels=labels, average="macro", zero_division=0)),
+        "accuracy": float(accuracy_score(y, pred)),
+        "per_class_f1": {e: float(v) for e, v in zip(EMOTIONS, per_class)},
+    }
+
+
+def rel_path(p: Path) -> str:
+    """``p`` relative to the repository root when it lies inside it, else ``p`` unchanged."""
+    return str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else str(p)
 
 
 def run_dir(name: str, seed: int, root: Path | None = None) -> Path:

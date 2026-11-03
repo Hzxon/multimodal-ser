@@ -30,16 +30,8 @@ from sklearn.metrics import f1_score
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.common import NUM_CLASSES, load_yaml  # noqa: E402
+from src.common import NUM_CLASSES, load_yaml, set_nested  # noqa: E402
 from src.data.dataset import load_manifest  # noqa: E402
-
-
-def set_nested(cfg: dict, dotted: str, value) -> None:
-    d = cfg
-    keys = dotted.split(".")
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    d[keys[-1]] = value
 
 
 def run_train(extra: list[str], args: argparse.Namespace, name: str) -> Path:
@@ -149,7 +141,7 @@ def main() -> int:
                      f"{'PASS' if r['m1_pass'] else 'FAIL'} | {r['m2_dev_macro_f1']:.3f} | {r['m2_dev_weighted_f1']:.3f} | "
                      f"{r['chance_majority']:.3f} | {r['chance_random']:.3f} | [{r['m2_band_lo']:.3f}, {r['m2_band_hi']:.3f}] | {r['m2_epochs']} | "
                      f"{r['m2_steps'] if r['m2_steps'] is not None else '-'} | {'PASS' if r['m2_pass'] else 'FAIL'} |")
-    lines += ["", "M1: one fixed batch, data augmentation and SpecAugment off, PASS when train accuracy >= 0.99 within the step budget.",
+    lines += ["", "M1: one fixed batch, data augmentation, SpecAugment and modality dropout off, PASS when train accuracy >= 0.99 within the step budget.",
               "M2: train labels permuted with the seed, trained for the full --m2-epochs; PASS when dev macro F1 lies within +-3 points of chance, "
               "i.e. in [min(chance majority, chance random) - 0.03, max(...) + 0.03]. Above the band: leakage or a shortcut; below it: the control did not reach chance.", ""]
     out = Path(args.out)
