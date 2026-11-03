@@ -107,6 +107,62 @@ case studies), `reports/figures/`.
 Notebooks: `notebooks/02_asr_quality.ipynb`, `03_results.ipynb`, `04_xai.ipynb` are thin viewers
 over the reports and `runs/`.
 
+## Full run from a fresh clone
+
+Git holds the code, configs, frozen manifests and reports. The audio, the Whisper transcripts
+(`data/manifests/asr/`), the feature caches and every run under `runs/` are local, so a fresh
+clone rebuilds them. Needs `uv`, `ffmpeg`, internet (MELD and the Hugging Face models
+roberta-base, wavlm-base-plus and whisper-small download on first use), a CUDA GPU and roughly
+50-60 GB of free disk (estimate: archive and extracted clips about 22 GB, checkpoints about
+10 GB per seed in the smoke run).
+
+1. Clone and install (`uv` picks Python 3.11 and creates `.venv/`, which `run_all.sh` uses):
+
+   ```bash
+   git clone https://github.com/Hzxon/multimodal-ser.git && cd multimodal-ser
+   ```
+
+   ```bash
+   uv sync
+   ```
+
+2. Download MELD (10.9 GB archive plus the label CSVs) into `data/raw/`:
+
+   ```bash
+   mkdir -p data/raw && curl -L -o data/raw/MELD.Raw.tar.gz https://huggingface.co/datasets/declare-lab/MELD/resolve/main/MELD.Raw.tar.gz
+   ```
+
+   ```bash
+   for s in train dev test; do curl -L -o data/raw/${s}_sent_emo.csv https://raw.githubusercontent.com/declare-lab/MELD/master/data/MELD/${s}_sent_emo.csv; done
+   ```
+
+3. Build the audio once, then check the setup on the 48-row smoke subset (about 40 min; smoke
+   mode skips stage 0 and reuses the WAVs):
+
+   ```bash
+   bash scripts/run_all.sh --only 0 --device cuda
+   ```
+
+   ```bash
+   bash scripts/run_all.sh --smoke --device cuda
+   ```
+
+4. Run the full ladder in `tmux` or with `nohup`. Stage 0 is already done; stage 1 (Whisper)
+   must run, because the transcripts are not in git:
+
+   ```bash
+   bash scripts/run_all.sh --skip-data --device cuda
+   ```
+
+   The script prints its time estimate at the start (about 6-9 T4-hours for three seeds plus ASR
+   and the stage-6 ablation arms). If it stops, re-run with the finished stages skipped, e.g.
+   `--skip-data --skip 1,2,3`. Stage 7 resumes where it stopped; stages 4 and 6 retrain from
+   scratch, so skip them once they have finished.
+
+5. Before the report: fill `reports/literature.yaml` (Gate V7) and the manual columns of
+   `reports/error_analysis.csv` (Gate V8). The run rewrites tracked files under `reports/` and
+   `data/manifests/`, so agree on who commits the results.
+
 ## Demo
 
 ```bash
