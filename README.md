@@ -104,8 +104,11 @@ git_commit.txt, test_metrics.json, test_predictions*.csv}`; `reports/results.md`
 `reports/gate5_eval.md`, `reports/error_analysis.csv`, `reports/xai/` (Gate 6 report, figures,
 case studies), `reports/figures/`.
 
-Notebooks: `notebooks/02_asr_quality.ipynb`, `03_results.ipynb`, `04_xai.ipynb` are thin viewers
-over the reports and `runs/`.
+Notebooks: `notebooks/00_project_results.ipynb` is the presentation of the project results in one
+place (pipeline diagram, data, ASR quality, results with confidence intervals, training curves,
+per-class F1 and confusion matrix, significance, robustness, ablations, explanations, gates); open
+it after the full run and use Run All. `notebooks/02_asr_quality.ipynb`, `03_results.ipynb`,
+`04_xai.ipynb` are thin viewers over the reports and `runs/` for the detail of each phase.
 
 ## Full run from a fresh clone
 
